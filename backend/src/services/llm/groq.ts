@@ -54,3 +54,42 @@ export async function completeJSON<T>(opts: CompleteJSONOptions): Promise<T> {
     });
   }
 }
+
+export type CompleteJSONWithHistoryOptions = {
+  system: string;
+  history: ChatTurn[];
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+};
+
+export async function completeJSONWithHistory<T>(
+  opts: CompleteJSONWithHistoryOptions
+): Promise<T> {
+  const res = await client().chat.completions.create({
+    model: opts.model ?? config.groq.model,
+    response_format: { type: "json_object" },
+    temperature: opts.temperature ?? 0.7,
+    max_completion_tokens: opts.maxTokens ?? 1000,
+    top_p: 1,
+    stream: false,
+    messages: [
+      { role: "system", content: opts.system },
+      ...opts.history.map((m) => ({ role: m.role, content: m.content })),
+    ],
+  });
+
+  const raw = res.choices[0]?.message?.content?.trim();
+  if (!raw) {
+    throw new HttpError(502, "llm_empty_response", "Model returned no content");
+  }
+
+  try {
+    return JSON.parse(raw) as T;
+  } catch (e) {
+    throw new HttpError(502, "llm_invalid_json", "Model output was not valid JSON", {
+      raw,
+      cause: (e as Error).message,
+    });
+  }
+}

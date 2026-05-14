@@ -120,12 +120,58 @@ router.post("/:id/messages", validateBody(sendMessageSchema), async (req, res, n
       `INSERT INTO messages (id, chat_id, role, content, attachments) VALUES (?, ?, 'user', ?, ?)`
     ).run(userMsgId, chat.id, content, files?.length ? JSON.stringify(files) : null);
 
+    // Load the full conversation (including the message we just inserted) so
+    // the pipeline can run multi-turn discovery before generating.
+    const priorRows = db
+      .prepare(
+        `SELECT role, content, attachments FROM messages
+         WHERE chat_id = ? AND role IN ('user','assistant')
+         ORDER BY datetime(created_at) ASC`
+      )
+      .all(chat.id) as Pick<MessageRow, "role" | "content" | "attachments">[];
+
+    const history = priorRows.map((r) => ({
+      role: r.role as "user" | "assistant",
+      content: r.content,
+    }));
+
+    // Aggregate files from every user turn so a logo / brand doc uploaded
+    // earlier in the conversation is still available when generation runs.
+    const seenFileIds = new Set<string>();
+    const allFiles: { fileId: string; fileName: string; url: string; mimeType: string }[] = [];
+    for (const row of priorRows) {
+      if (row.role !== "user" || !row.attachments) continue;
+      try {
+        const parsed = JSON.parse(row.attachments) as {
+          fileId: string;
+          fileName: string;
+          url: string;
+          mimeType: string;
+        }[];
+        for (const f of parsed) {
+          if (!seenFileIds.has(f.fileId)) {
+            seenFileIds.add(f.fileId);
+            allFiles.push(f);
+          }
+        }
+      } catch {
+        // ignore malformed attachment blobs
+      }
+    }
+    for (const f of files ?? []) {
+      if (!seenFileIds.has(f.fileId)) {
+        seenFileIds.add(f.fileId);
+        allFiles.push(f);
+      }
+    }
+
     let reply: { content: string; attachments: unknown };
     try {
       const result = await runPipeline(chat.mode as ChatMode, content, {
         assistantMsgId,
         userId: req.user!.id,
-        files: files ?? [],
+        files: allFiles,
+        history,
       });
       reply = { content: result.content, attachments: result.attachments };
     } catch (err) {

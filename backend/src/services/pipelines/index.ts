@@ -23,10 +23,16 @@ export type FileRef = {
   mimeType: string;
 };
 
+export type ChatHistoryTurn = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 export type PipelineContext = {
   assistantMsgId: string;
   userId: string;
   files: FileRef[];
+  history: ChatHistoryTurn[];
 };
 
 function buildBrandContext(userPrompt: string, files: FileRef[]): string {

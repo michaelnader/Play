@@ -1,7 +1,15 @@
-import { completeJSON } from "../llm/groq.js";
+import { completeJSON, completeJSONWithHistory } from "../llm/groq.js";
 import { config } from "../../config.js";
-import { ALL_IN_ONE_SYSTEM_PROMPT } from "../llm/prompts.js";
-import { allInOneResultSchema, type AllInOneResult, type AllInOnePost } from "../llm/schemas.js";
+import {
+  ALL_IN_ONE_SYSTEM_PROMPT,
+  ALL_IN_ONE_INTAKE_SYSTEM_PROMPT,
+} from "../llm/prompts.js";
+import {
+  allInOneResultSchema,
+  intakeResultSchema,
+  type AllInOneResult,
+  type AllInOnePost,
+} from "../llm/schemas.js";
 import { generateImage } from "../image/index.js";
 import { saveImage } from "../image/storage.js";
 import { overlayLogo } from "../image/overlay.js";
@@ -63,10 +71,38 @@ export async function runAllInOnePipeline(
   assistantMsgId: string,
   ctx: PipelineContext
 ): Promise<PipelineResult> {
+  // Step 0 — Intake: chat with the user until they explicitly green-light generation.
+  // The model sees the full conversation history and either asks a follow-up
+  // (status: "ask") or returns a consolidated brief (status: "execute").
+  const intakeRaw = await completeJSONWithHistory<unknown>({
+    system: ALL_IN_ONE_INTAKE_SYSTEM_PROMPT,
+    history: ctx.history,
+    model: config.groq.model,
+    temperature: 0.6,
+    maxTokens: 700,
+  });
+
+  const intakeParsed = intakeResultSchema.safeParse(intakeRaw);
+  if (!intakeParsed.success) {
+    return {
+      content:
+        "Hey — tell me a bit about what you're posting about: the business, who it's for, and the vibe you want?",
+      attachments: null,
+    };
+  }
+
+  if (intakeParsed.data.status === "ask") {
+    return { content: intakeParsed.data.message, attachments: null };
+  }
+
+  // status === "execute": use the consolidated brief the intake step produced,
+  // falling back to the current user prompt if for some reason it's missing.
+  const generationInput = intakeParsed.data.brief?.trim() || userPrompt;
+
   // Step 1: One LLM call produces the plan + both post briefs + both captions.
   const raw = await completeJSON<unknown>({
     system: ALL_IN_ONE_SYSTEM_PROMPT,
-    user: userPrompt,
+    user: generationInput,
     model: config.groq.model, // smarter 70B model — orchestrating plan + 2 posts
     temperature: 0.85,
     maxTokens: 3500,

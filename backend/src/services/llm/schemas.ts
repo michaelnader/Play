@@ -63,3 +63,11 @@ export const allInOneResultSchema = z.object({
 
 export type AllInOneResult = z.infer<typeof allInOneResultSchema>;
 export type AllInOnePost = z.infer<typeof allInOnePostSchema>;
+
+export const intakeResultSchema = z.object({
+  status: z.enum(["ask", "execute"]),
+  message: z.string().min(1).max(1200),
+  brief: z.string().max(4000).optional(),
+});
+
+export type IntakeResult = z.infer<typeof intakeResultSchema>;
